@@ -889,6 +889,7 @@ name = "bevy_texture_atlas_asset_builder"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "serde",
 ]
 
 [[package]]
