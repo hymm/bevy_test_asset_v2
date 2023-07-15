@@ -1,62 +1,25 @@
-use bevy::{prelude::*, asset::AssetLoader};
-use bevy::asset::saver::AssetSaver;
-use bevy::utils::HashMap;
-use serde::{Deserialize, Serialize};
+mod texture_atlas_loader;
+
+use bevy::prelude::*;
+use texture_atlas_loader::TextureAtlasLoader;
 
 fn main() {
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(AssetPlugin::processed_dev()))
+        .register_asset_loader(TextureAtlasLoader)
+        .add_systems(Startup, setup)
         .run();
 }
 
-struct TextureAtlasSaver {
-    atlases: HashMap<&'static str, Vec<Handle<Image>>>,
-}
+fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+    commands.spawn(Camera2dBundle::default());
 
-#[derive(Serialize, Deserialize, Default)]
-struct TextureAtlasSaverSettings {
-    target_atlas: String,
-}
+    let texture_atlas = asset_server.load("images/suv.texture_atlas");
 
-impl AssetSaver for TextureAtlasSaver {
-    type Asset = Image;
+    commands.spawn(SpriteSheetBundle {
+        sprite: TextureAtlasSprite::new(0),
+        texture_atlas,
+        ..default()
+    });
 
-    type Settings = TextureAtlasSaverSettings;
-
-    type OutputLoader = TextureAtlasLoader;
-
-    fn save<'a>(
-        &'a self,
-        writer: &'a mut bevy::asset::io::Writer,
-        asset: &'a Self::Asset,
-        settings: &'a Self::Settings,
-    ) -> bevy::utils::BoxedFuture<'a, Result<<Self::OutputLoader as bevy::asset::AssetLoader>::Settings, anyhow::Error>> {
-        todo!()
-    }
-}
-
-struct TextureAtlasLoader {
-
-}
-
-#[derive(Serialize, Deserialize, Default)]
-struct TextureAtlasLoaderSettings {}
-
-impl AssetLoader for TextureAtlasLoader {
-    type Asset = Image;
-
-    type Settings = TextureAtlasLoaderSettings;
-
-    fn load<'a>(
-        &'a self,
-        reader: &'a mut bevy::asset::io::Reader,
-        settings: &'a Self::Settings,
-        load_context: &'a mut bevy::asset::LoadContext,
-    ) -> bevy::utils::BoxedFuture<'a, Result<Self::Asset, anyhow::Error>> {
-        todo!()
-    }
-
-    fn extensions(&self) -> &[&str] {
-        todo!()
-    }
 }

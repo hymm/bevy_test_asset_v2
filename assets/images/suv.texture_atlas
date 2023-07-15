@@ -1,0 +1,13 @@
+(
+  image: "images/suv.png",
+  areas: [
+    Rect (
+      min: (0.0, 0.0),
+      max: (14.0, 8.0),
+    ),
+    Rect (
+      min: (15.0, 0.0),
+      max: (28.0, 8.0),
+    )
+  ]
+)

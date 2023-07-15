@@ -1,0 +1,6 @@
+(
+  source_images: [
+    "bus_stop.png",
+    "house.png",
+  ]
+)

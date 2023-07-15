@@ -888,7 +888,9 @@ dependencies = [
 name = "bevy_texture_atlas_asset_builder"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "bevy",
+ "ron",
  "serde",
 ]
 

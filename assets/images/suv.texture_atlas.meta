@@ -1,0 +1,10 @@
+(
+    meta_format_version: "1.0",
+    asset: Load(
+        loader: "bevy_texture_atlas_asset_builder::texture_atlas_loader::TextureAtlasLoader",
+        settings: (
+            areas: [],
+            image: "",
+        ),
+    ),
+)
