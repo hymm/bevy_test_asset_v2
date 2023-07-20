@@ -29,7 +29,7 @@ impl AssetLoader for TextureAtlasLoader {
             let image: Image = image.take().unwrap();
             let dimensions = image.size();
 
-            let handle = load_context.load(&ron.image);
+            let handle = load_context.add_labeled_asset(ron.image, image);
 
             let mut texture_atlas = TextureAtlas::new_empty(handle, dimensions);
             for area in ron.areas {
