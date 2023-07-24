@@ -1,0 +1,10 @@
+(
+    meta_format_version: "1.0",
+    asset: Process(
+        processor: "bevy_asset::processor::process::LoadAndSave<bevy_texture_atlas_asset_builder::texture_atlas_builder_loader::TextureAtlasBuilderLoader, bevy_texture_atlas_asset_builder::texture_atlas_builder_loader::BuiltAtlasSaver>",
+        settings: (
+            loader_settings: (),
+            saver_settings: (),
+        ),
+    ),
+)

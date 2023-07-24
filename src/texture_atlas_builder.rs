@@ -1,71 +1,230 @@
-use bevy::asset::saver::AssetSaver;
-use bevy::asset::AsyncReadExt;
-use bevy::reflect::TypePath;
+// fork of bevy atlas loader that outputs the raw image and areas
+// instead of adding it to assets
+use bevy::log::{debug, error, warn};
+use bevy::math::{Rect, Vec2};
+use bevy::render::{
+    render_resource::{Extent3d, TextureDimension, TextureFormat},
+    texture::{Image, TextureFormatPixelInfo},
+};
 use bevy::utils::HashMap;
+use rectangle_pack::{
+    contains_smallest_box, pack_rects, volume_heuristic, GroupedRectsToPlace, PackedLocation,
+    RectToInsert, TargetBin,
+};
+use thiserror::Error;
 
-#[derive(Asset, TypePath)]
-struct AtlasImage {
-    texture: Handle<Image>,
-    named_areas: HashMap<String, usize>,
-    areas: Vec<Rect>,
+#[derive(Debug, Error)]
+pub enum TextureAtlasBuilderError {
+    #[error("could not pack textures into an atlas within the given bounds")]
+    NotEnoughSpace,
+    #[error("added a texture with the wrong format in an atlas")]
+    WrongFormat,
 }
 
-/// loads a texture atlas from a config file
-struct TextureAtlasBuilderLoader {}
-
-#[derive(Serialize, Deserialize, Default)]
-struct TextureAtlasConfigLoaderSettings {}
-
-#[derive(Serialize, Deserialize, Default)]
-struct TextureAtlasBuilder {
-    source_images: Vec<String>,
+#[derive(Debug)]
+#[must_use]
+/// A builder which is used to create a texture atlas from many individual
+/// sprites.
+pub struct TextureAtlasBuilder {
+    /// The grouped rects which must be placed with a key value pair of a
+    /// texture handle to an index.
+    rects_to_place: GroupedRectsToPlace<String>,
+    /// textures
+    images: HashMap<String, Image>,
+    /// The initial atlas size in pixels.
+    initial_size: Vec2,
+    /// The absolute maximum size of the texture atlas in pixels.
+    max_size: Vec2,
+    /// The texture format for the textures that will be loaded in the atlas.
+    format: TextureFormat,
+    /// Enable automatic format conversion for textures if they are not in the atlas format.
+    auto_format_conversion: bool,
 }
 
-impl AssetLoader for TextureAtlasBuilderLoader {
-    type Asset = TextureAtlasBuilder;
+impl Default for TextureAtlasBuilder {
+    fn default() -> Self {
+        Self {
+            rects_to_place: GroupedRectsToPlace::new(),
+            images: HashMap::new(),
+            initial_size: Vec2::new(256., 256.),
+            max_size: Vec2::new(2048., 2048.),
+            format: TextureFormat::Rgba8Unorm,
+            auto_format_conversion: true,
+        }
+    }
+}
 
-    type Settings = TextureAtlasLoaderSettings;
+impl TextureAtlasBuilder {
+    // /// Sets the initial size of the atlas in pixels.
+    // pub fn initial_size(mut self, size: Vec2) -> Self {
+    //     self.initial_size = size;
+    //     self
+    // }
 
-    fn load<'a>(
-        &'a self,
-        reader: &'a mut bevy::asset::io::Reader,
-        settings: &'a Self::Settings,
-        load_context: &'a mut bevy::asset::LoadContext,
-    ) -> bevy::utils::BoxedFuture<'a, Result<Self::Asset, anyhow::Error>> {
-        Box::pin(async move {
-            let mut bytes = Vec::new();
-            reader.read_to_end(&mut bytes).await?;
-            let ron: TextureAtlasBuilder = ron::de::from_bytes(&bytes)?;
+    // /// Sets the max size of the atlas in pixels.
+    // pub fn max_size(mut self, size: Vec2) -> Self {
+    //     self.max_size = size;
+    //     self
+    // }
 
-            let builder = bevy::prelude::TextureAtlasBuilder::default();
+    // /// Sets the texture format for textures in the atlas.
+    // pub fn format(mut self, format: TextureFormat) -> Self {
+    //     self.format = format;
+    //     self
+    // }
 
+    /// Control whether the added texture should be converted to the atlas format, if different.
+    // pub fn auto_format_conversion(mut self, auto_format_conversion: bool) -> Self {
+    //     self.auto_format_conversion = auto_format_conversion;
+    //     self
+    // }
 
-            for src in ron.source_images {
-                let loaded = load_context.load_direct(&src).await?;
-                let image = loaded.get::<Image>().unwrap();
+    /// Adds a texture to be copied to the texture atlas.
+    pub fn add_texture(&mut self, key: String, texture: Image) {
+        self.rects_to_place.push_rect(
+            key.clone(),
+            None,
+            RectToInsert::new(
+                texture.texture_descriptor.size.width,
+                texture.texture_descriptor.size.height,
+                1,
+            ),
+        );
 
+        self.images.insert(key, texture);
+    }
+
+    fn copy_texture_to_atlas(
+        atlas_texture: &mut Image,
+        texture: &Image,
+        packed_location: &PackedLocation,
+    ) {
+        let rect_width = packed_location.width() as usize;
+        let rect_height = packed_location.height() as usize;
+        let rect_x = packed_location.x() as usize;
+        let rect_y = packed_location.y() as usize;
+        let atlas_width = atlas_texture.texture_descriptor.size.width as usize;
+        let format_size = atlas_texture.texture_descriptor.format.pixel_size();
+
+        for (texture_y, bound_y) in (rect_y..rect_y + rect_height).enumerate() {
+            let begin = (bound_y * atlas_width + rect_x) * format_size;
+            let end = begin + rect_width * format_size;
+            let texture_begin = texture_y * rect_width * format_size;
+            let texture_end = texture_begin + rect_width * format_size;
+            atlas_texture.data[begin..end]
+                .copy_from_slice(&texture.data[texture_begin..texture_end]);
+        }
+    }
+
+    fn copy_converted_texture(
+        &self,
+        atlas_texture: &mut Image,
+        texture: &Image,
+        packed_location: &PackedLocation,
+    ) {
+        if self.format == texture.texture_descriptor.format {
+            Self::copy_texture_to_atlas(atlas_texture, texture, packed_location);
+        } else if let Some(converted_texture) = texture.convert(self.format) {
+            debug!(
+                "Converting texture from '{:?}' to '{:?}'",
+                texture.texture_descriptor.format, self.format
+            );
+            Self::copy_texture_to_atlas(atlas_texture, &converted_texture, packed_location);
+        } else {
+            error!(
+                "Error converting texture from '{:?}' to '{:?}', ignoring",
+                texture.texture_descriptor.format, self.format
+            );
+        }
+    }
+
+    /// Consumes the builder and returns a result with a new texture atlas.
+    ///
+    /// Internally it copies all rectangles from the textures and copies them
+    /// into a new texture which the texture atlas will use. It is not useful to
+    /// hold a strong handle to the texture afterwards else it will exist twice
+    /// in memory.
+    ///
+    /// # Errors
+    ///
+    /// If there is not enough space in the atlas texture, an error will
+    /// be returned. It is then recommended to make a larger sprite sheet.
+    pub fn finish(self) -> Result<(Image, Vec<Rect>), TextureAtlasBuilderError> {
+        let initial_width = self.initial_size.x as u32;
+        let initial_height = self.initial_size.y as u32;
+        let max_width = self.max_size.x as u32;
+        let max_height = self.max_size.y as u32;
+
+        let mut current_width = initial_width;
+        let mut current_height = initial_height;
+        let mut rect_placements = None;
+        let mut atlas_texture = Image::default();
+
+        while rect_placements.is_none() {
+            if current_width > max_width || current_height > max_height {
+                break;
             }
 
-            todo!()
-        })
+            let last_attempt = current_height == max_height && current_width == max_width;
+
+            let mut target_bins = std::collections::BTreeMap::new();
+            target_bins.insert(0, TargetBin::new(current_width, current_height, 1));
+            rect_placements = match pack_rects(
+                &self.rects_to_place,
+                &mut target_bins,
+                &volume_heuristic,
+                &contains_smallest_box,
+            ) {
+                Ok(rect_placements) => {
+                    atlas_texture = Image::new(
+                        Extent3d {
+                            width: current_width,
+                            height: current_height,
+                            depth_or_array_layers: 1,
+                        },
+                        TextureDimension::D2,
+                        vec![
+                            0;
+                            self.format.pixel_size() * (current_width * current_height) as usize
+                        ],
+                        self.format,
+                    );
+                    Some(rect_placements)
+                }
+                Err(rectangle_pack::RectanglePackError::NotEnoughBinSpace) => {
+                    current_height = (current_height * 2).clamp(0, max_height);
+                    current_width = (current_width * 2).clamp(0, max_width);
+                    None
+                }
+            };
+
+            if last_attempt {
+                break;
+            }
+        }
+
+        let rect_placements = rect_placements.ok_or(TextureAtlasBuilderError::NotEnoughSpace)?;
+
+        let mut texture_rects = Vec::with_capacity(rect_placements.packed_locations().len());
+        for (id, (_, packed_location)) in rect_placements.packed_locations().iter() {
+            let min = Vec2::new(packed_location.x() as f32, packed_location.y() as f32);
+            let max = min
+                + Vec2::new(
+                    packed_location.width() as f32,
+                    packed_location.height() as f32,
+                );
+            texture_rects.push(Rect { min, max });
+            let texture = self.images.get(id).unwrap();
+            if texture.texture_descriptor.format != self.format && !self.auto_format_conversion {
+                warn!(
+                    "Loading a texture of format '{:?}' in an atlas with format '{:?}'",
+                    texture.texture_descriptor.format, self.format
+                );
+                return Err(TextureAtlasBuilderError::WrongFormat);
+            }
+            self.copy_converted_texture(&mut atlas_texture, texture, packed_location);
+        }
+
+        Ok((atlas_texture, texture_rects))
     }
-
-    fn extensions(&self) -> &[&str] {
-        &["texture_atlas_builder"]
-    }
-}
-
-
-struct TextureAtlasBuilderSaver {}
-
-impl AssetSaver for TextureAtlasBuilderSaver {
-    type Asset = TextureAtlasBuilder;
-    type Settings = TextureAtlasBuilderSaverSettings;
-    type OutputLoader = TextureAtlasLoader;
-
-    fn save<'a>(
-        &'a self,
-        writer: &'a mut Writer,
-        asset: &'a S
-    )
 }

@@ -1,4 +1,7 @@
-use bevy::{asset::{AssetLoader, AsyncReadExt, LoadedAsset}, prelude::*};
+use bevy::{
+    asset::{AssetLoader, AsyncReadExt},
+    prelude::*,
+};
 use serde::{Deserialize, Serialize};
 
 pub struct TextureAtlasLoader;
